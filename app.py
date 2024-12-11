@@ -19,7 +19,7 @@ def adjust_omega(image):
     brightness = calculate_brightness(image)
     
     # Thresholds for fog density determination
-    if contrast < 70:  # Dense fog
+    if contrast < 60:  # Dense fog
         omega = 0.95
     else:  # Clearer image
         omega = 0.1
@@ -129,25 +129,29 @@ def detect_lines(cropped_edges, image):
 
     return line_image
 
-def detect_lanes(image):
-    """Detect lanes in a defogged image while filtering out vertical lines."""
+def detect_lanes(image, roi_factor):
+    """Detect lanes in a defogged image with dynamic ROI based on slider."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = cv2.Canny(blur, 50, 150)
     height, width = edges.shape
     mask = np.zeros_like(edges)
+
+    # Dynamically adjust ROI based on slider input
+    top_height = int(height * roi_factor)
     polygon = np.array([
-        (0, height),
-        (width, height),
-        (width, height // 1.7),
-        (0, height // 1.7)
+        (0, height),            # Bottom-left corner
+        (width, height),        # Bottom-right corner
+        (width, top_height),    # Top-right corner
+        (0, top_height)         # Top-left corner
     ], np.int32)
     cv2.fillPoly(mask, [polygon], 255)
     cropped_edges = cv2.bitwise_and(edges, mask)
+
+    # Detect and draw lane lines
     line_image = detect_lines(cropped_edges, image)
     lane_image = cv2.addWeighted(image, 0.8, line_image, 1, 1)
     return lane_image, gray, blur, edges, cropped_edges
-
 
 
 st.title("Foggy Lane Detection")
@@ -168,12 +172,12 @@ if uploaded_file is not None:
     st.image(defogged_image, caption="Defogged Image", use_container_width=True)
 
     # Step 2: Detect lanes
-    lane_image, gray, blur, edges, cropped_edges = detect_lanes(defogged_image)
+    roi_factor = st.slider("Select custom roi", 0.0, 1.0, 0.6)
+    lane_image, gray, blur, edges, cropped_edges = detect_lanes(defogged_image, roi_factor)
     if st.checkbox("Show Intermediate Lane Detection Results"):
         st.image(gray, caption="Grayscale Image", use_container_width=True, clamp=True)
         st.image(blur, caption="Blurred Image", use_container_width=True, clamp=True)
         st.image(edges, caption="Edges", use_container_width=True, clamp=True)
-        st.slider("Select custom roi", 0.0, 1.0, 0.5)
         st.image(cropped_edges, caption="Region of Interest", use_container_width=True, clamp=True)
     st.image(lane_image, caption="Final Lane Detection", use_container_width=True)
 
