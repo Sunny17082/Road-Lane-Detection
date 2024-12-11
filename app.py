@@ -23,7 +23,7 @@ def adjust_omega(image):
         omega = 0.95
     else:  # Clearer image
         omega = 0.1
-    print(f"Contrast: {contrast}, Brightness: {brightness}, Omega: {omega}")
+    # print(f"Contrast: {contrast}, Brightness: {brightness}, Omega: {omega}")
     # omega = 1 - (contrast / 100) * (brightness / 255)
     return omega
 
@@ -161,17 +161,20 @@ if uploaded_file is not None:
 
     # Step 1: Defog the image
     defogged_image, dark_channel_img, transmission_map, omega = defog_image(input_image)
-    st.write(f"Dynamically adjusted omega: {omega}")
+    # st.write(f"Dynamically adjusted omega: {omega}")
+    if st.checkbox("Show Intermediate Results"):
+        st.image(dark_channel_img, caption="Dark Channel", use_container_width=True, clamp=True)
+        st.image(transmission_map, caption="Transmission Map", use_container_width=True, clamp=True)
     st.image(defogged_image, caption="Defogged Image", use_container_width=True)
-    st.image(dark_channel_img, caption="Dark Channel", use_container_width=True, clamp=True)
-    st.image(transmission_map, caption="Transmission Map", use_container_width=True, clamp=True)
 
     # Step 2: Detect lanes
     lane_image, gray, blur, edges, cropped_edges = detect_lanes(defogged_image)
-    st.image(gray, caption="Grayscale Image", use_container_width=True, clamp=True)
-    st.image(blur, caption="Blurred Image", use_container_width=True, clamp=True)
-    st.image(edges, caption="Edges", use_container_width=True, clamp=True)
-    st.image(cropped_edges, caption="Region of Interest", use_container_width=True, clamp=True)
+    if st.checkbox("Show Intermediate Lane Detection Results"):
+        st.image(gray, caption="Grayscale Image", use_container_width=True, clamp=True)
+        st.image(blur, caption="Blurred Image", use_container_width=True, clamp=True)
+        st.image(edges, caption="Edges", use_container_width=True, clamp=True)
+        st.slider("Select custom roi", 0.0, 1.0, 0.5)
+        st.image(cropped_edges, caption="Region of Interest", use_container_width=True, clamp=True)
     st.image(lane_image, caption="Final Lane Detection", use_container_width=True)
 
     # Convert the final image to a downloadable format
