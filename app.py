@@ -1,3 +1,4 @@
+import json
 import cv2 # type: ignore
 import numpy as np
 import streamlit as st
@@ -6,10 +7,11 @@ from io import BytesIO
 
 def dynamic_omega(image):
     """Calculate the dynamic omega value based on the image content."""
-    # Calculate the average intensity of the image
     avg_intensity = np.mean(image)
-    # Calculate the dynamic omega value
-    omega = 0.95 - (avg_intensity / 255) * 0.5
+    if avg_intensity < 100:
+        omega = 0.75
+    else:
+        omega = 0.95
     return omega
 
 def dark_channel(image, size=5):
@@ -57,7 +59,7 @@ def average_lines(image, lines):
     slope = poly[0]
     intercept = poly[1]
     y1 = image.shape[0]
-    y2 = int(y1 * 0.67)  # Approximate position for the lane
+    y2 = int(y1 * 0.6)  # Approximate position for the lane
     x1 = int(slope * y1 + intercept)
     x2 = int(slope * y2 + intercept)
     return (x1, y1, x2, y2)
@@ -68,37 +70,33 @@ def detect_lines(cropped_edges, image):
         cropped_edges, rho=1, theta=np.pi / 180, threshold=20, minLineLength=50, maxLineGap=150
     )
     line_image = np.zeros_like(image)
-    
+
     left_lines = []
     right_lines = []
-    
+
     if lines is not None:
         for line in lines:
             x1, y1, x2, y2 = line[0]
-            # Calculate slope
             if x2 != x1:
                 slope = (y2 - y1) / (x2 - x1)
             else:
-                slope = np.inf  # Vertical line
-            
-            # Filter out vertical and near-horizontal lines
-            if 0.43 < abs(slope) < 5:  # Adjust slope thresholds based on your use case
+                slope = np.inf
+
+            if 0.43 < abs(slope) < 5:
                 if slope < 0:
                     left_lines.append((x1, y1, x2, y2))
                 else:
                     right_lines.append((x1, y1, x2, y2))
-    
+
     left_lane = average_lines(image, left_lines)
     right_lane = average_lines(image, right_lines)
-    
-    # Draw lanes on the image
+
     if left_lane is not None:
         cv2.line(line_image, (left_lane[0], left_lane[1]), (left_lane[2], left_lane[3]), (0, 255, 0), 5)
     if right_lane is not None:
         cv2.line(line_image, (right_lane[0], right_lane[1]), (right_lane[2], right_lane[3]), (0, 255, 0), 5)
-    
-    return line_image
 
+    return line_image, left_lane, right_lane
 
 def detect_lanes(image):
     """Detect lanes in a defogged image while filtering out vertical lines."""
@@ -110,49 +108,69 @@ def detect_lanes(image):
     polygon = np.array([
         (0, height),
         (width, height),
-        (width, height // 1.7),
-        (0, height // 1.7)
+        (width, height // 1.9),
+        (0, height // 1.9)
     ], np.int32)
     cv2.fillPoly(mask, [polygon], 255)
     cropped_edges = cv2.bitwise_and(edges, mask)
-    line_image = detect_lines(cropped_edges, image)
+    line_image, left_lane, right_lane = detect_lines(cropped_edges, image)
     lane_image = cv2.addWeighted(image, 0.8, line_image, 1, 1)
-    return lane_image, gray, blur, edges, cropped_edges
+    return lane_image, gray, blur, edges, cropped_edges, left_lane, right_lane
+
+def calculate_iou(detected_lane, ground_truth_polygon, image_shape):
+    """Calculate Intersection over Union (IoU) between a detected lane and the ground truth polygon."""
+    # Create the lane mask based on the input image's shape
+    lane_mask = np.zeros(image_shape[:2], dtype=np.uint8)  # Use the input image's height and width
+    cv2.line(lane_mask, (detected_lane[0], detected_lane[1]), (detected_lane[2], detected_lane[3]), 255, 5)
+
+    # Convert ground truth polygon to a mask
+    gt_polygon = np.array([[(int(point['x']), int(point['y'])) for point in ground_truth_polygon]])
+    gt_mask = np.zeros(image_shape[:2], dtype=np.uint8)
+    cv2.fillPoly(gt_mask, gt_polygon, 255)
+
+    # Ensure both masks are the same size before performing logical operations
+    if lane_mask.shape != gt_mask.shape:
+        gt_mask = cv2.resize(gt_mask, (lane_mask.shape[1], lane_mask.shape[0]))
+
+    intersection = np.logical_and(lane_mask, gt_mask).sum()
+    union = np.logical_or(lane_mask, gt_mask).sum()
+
+    return intersection / union if union > 0 else 0
 
 
+def compute_lane_accuracy(left_lane, right_lane, ground_truth_json, image_shape):
+    """Compute the accuracy of lane detection using IoU."""
+    gt_data = json.load(ground_truth_json)
 
-st.title("Foggy Lane Detection")
+    left_gt_polygon = gt_data[0]["content"]
+    right_gt_polygon = gt_data[1]["content"]
 
-uploaded_file = st.file_uploader("Upload an Image", type=["jpg", "jpeg", "png", "webp"])
+    left_iou = calculate_iou(left_lane, left_gt_polygon, image_shape) if left_lane is not None else 0
+    right_iou = calculate_iou(right_lane, right_gt_polygon, image_shape) if right_lane is not None else 0
+    st.write(f"Left Lane IoU: {left_iou:.2f}, Right Lane IoU: {right_iou:.2f}")
+    return (left_iou + right_iou) / 2
+
+st.title("Foggy Lane Detection with Accuracy")
+
+uploaded_file = st.file_uploader("Upload an Image", type=["jpg", "jpeg", "png", "webp", "avif"])
+ground_truth_file = st.file_uploader("Upload Ground Truth", type=["json"])
+
 if uploaded_file is not None:
-    # Load the image
     input_image = np.array(Image.open(uploaded_file))
     st.image(input_image, caption="Uploaded Image", use_container_width=True)
 
-    # Step 1: Defog the image
     defogged_image, dark_channel_img, transmission_map = defog_image(input_image)
+    st.image(dark_channel_img, caption="Dark Channel Image", use_container_width=True)
+    st.image(transmission_map, caption="Transmission Map", use_container_width=True)
     st.image(defogged_image, caption="Defogged Image", use_container_width=True)
-    st.image(dark_channel_img, caption="Dark Channel", use_container_width=True, clamp=True)
-    st.image(transmission_map, caption="Transmission Map", use_container_width=True, clamp=True)
-
-    # Step 2: Detect lanes
-    lane_image, gray, blur, edges, cropped_edges = detect_lanes(defogged_image)
-    st.image(gray, caption="Grayscale Image", use_container_width=True, clamp=True)
-    st.image(blur, caption="Blurred Image", use_container_width=True, clamp=True)
-    st.image(edges, caption="Edges", use_container_width=True, clamp=True)
-    st.image(cropped_edges, caption="Region of Interest", use_container_width=True, clamp=True)
+    
+    lane_image, gray, blur, edges, cropped_edges, left_lane, right_lane = detect_lanes(defogged_image)
+    st.image(gray, caption="Gray Image", use_container_width=True)
+    st.image(blur, caption="Blurred Image", use_container_width=True)
+    st.image(edges, caption="Edges Image", use_container_width=True)
+    st.image(cropped_edges, caption="Cropped Edges Image", use_container_width=True)
     st.image(lane_image, caption="Final Lane Detection", use_container_width=True)
 
-    # Convert the final image to a downloadable format
-    lane_image_pil = Image.fromarray(lane_image.astype('uint8'))  # Convert to PIL Image
-    buffer = BytesIO()
-    lane_image_pil.save(buffer, format="PNG")  # Save as PNG
-    buffer.seek(0)
-
-    # Add download button
-    st.download_button(
-        label="Download Final Lane Detection Image",
-        data=buffer,
-        file_name="lane_detection_result.png",
-        mime="image/png"
-    )
+if ground_truth_file is not None:
+    accuracy = compute_lane_accuracy(left_lane, right_lane, ground_truth_file, input_image.shape)
+    st.write(f"Lane Detection Accuracy (IoU): {accuracy * 100:.2f}%")
