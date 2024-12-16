@@ -8,7 +8,7 @@ from io import BytesIO
 def dynamic_omega(image):
     """Calculate the dynamic omega value based on the image content."""
     avg_intensity = np.mean(image)
-    if avg_intensity < 100:
+    if avg_intensity < 90:
         omega = 0.75
     else:
         omega = 0.95
