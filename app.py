@@ -1,5 +1,5 @@
 import json
-import cv2 # type: ignore
+import cv2
 import numpy as np
 import streamlit as st
 from PIL import Image
@@ -46,22 +46,41 @@ def defog_image(image):
     J = np.clip(J, 0, 255).astype(np.uint8)
     return J, dark_channel_img, t
 
-def average_lines(image, lines):
-    """Average out multiple lines into a single line."""
+def average_lines(image, lines, slope_threshold=0.1):
+    """Average out multiple lines into a single line with outlier filtering."""
     if len(lines) == 0:
         return None
-    x_coords = []
-    y_coords = []
-    for line in lines:
-        x_coords.extend([line[0], line[2]])
-        y_coords.extend([line[1], line[3]])
-    poly = np.polyfit(y_coords, x_coords, deg=1)
-    slope = poly[0]
-    intercept = poly[1]
-    y1 = image.shape[0]
-    y2 = int(y1 * 0.6)  # Approximate position for the lane
+
+    # Separate x and y coordinates for all line segments
+    x_coords, y_coords, weights = [], [], []
+
+    for x1, y1, x2, y2 in lines:
+        # Calculate slope and line length
+        dx, dy = x2 - x1, y2 - y1
+        slope = dy / dx if dx != 0 else np.inf
+        length = np.sqrt(dx**2 + dy**2)
+
+        # Filter lines based on slope threshold
+        if -slope_threshold < slope < slope_threshold:
+            continue
+
+        x_coords.extend([x1, x2])
+        y_coords.extend([y1, y2])
+        weights.extend([length, length])  # Weight by line length
+
+    if len(x_coords) == 0:
+        return None
+
+    # Fit a weighted least-squares line to the points
+    poly = np.polyfit(y_coords, x_coords, deg=1, w=weights)
+    slope, intercept = poly[0], poly[1]
+
+    # Define points for the averaged line
+    y1 = image.shape[0]  # Bottom of the image
+    y2 = int(y1 * 0.67)  # 2/3 height of the image
     x1 = int(slope * y1 + intercept)
     x2 = int(slope * y2 + intercept)
+
     return (x1, y1, x2, y2)
 
 def detect_lines(cropped_edges, image):
@@ -137,6 +156,40 @@ def calculate_iou(detected_lane, ground_truth_polygon, image_shape):
 
     return intersection / union if union > 0 else 0
 
+def downgrade_image(image, uploaded_file, max_file_size_kb=500, resolution=(640, 360), quality=50):
+    """
+    Resize and compress the image only if its size exceeds the specified limit (in KB).
+    :param image: The input image as a NumPy array.
+    :param uploaded_file: The uploaded file to check size.
+    :param max_file_size_kb: Maximum file size allowed in KB.
+    :param resolution: The target resolution for resizing.
+    :param quality: The target quality for compression (1-100).
+    :return: The processed image (if needed) or the original image.
+    """
+    # Check the file size
+    file_size_kb = len(uploaded_file.getvalue()) / 1024  # Convert bytes to KB
+
+    # Process only if the file size is greater than the specified limit
+    if file_size_kb > max_file_size_kb:
+        # Check if the image has an alpha channel and convert it to RGB if necessary
+        if image.shape[-1] == 4:  # Check if the image is RGBA
+            image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
+        
+        # Resize the image
+        resized_image = cv2.resize(image, resolution, interpolation=cv2.INTER_AREA)
+        
+        # Convert to PIL for quality adjustment
+        pil_image = Image.fromarray(resized_image)
+        buffer = BytesIO()
+        pil_image.save(buffer, format="JPEG", quality=quality)
+        downgraded_image = np.array(Image.open(buffer))
+        
+        return downgraded_image
+    else:
+        # Return the original image if the size is below the limit
+        return image
+
+
 
 def compute_lane_accuracy(left_lane, right_lane, ground_truth_json, image_shape):
     """Compute the accuracy of lane detection using IoU."""
@@ -158,8 +211,13 @@ ground_truth_file = st.file_uploader("Upload Ground Truth", type=["json"])
 if uploaded_file is not None:
     input_image = np.array(Image.open(uploaded_file))
     st.image(input_image, caption="Uploaded Image", use_container_width=True)
+    
+    # Downgrade the image
+    downgraded_image = downgrade_image(input_image, uploaded_file)
+    st.image(downgraded_image, caption="Downgraded Image", use_container_width=True)
 
-    defogged_image, dark_channel_img, transmission_map = defog_image(input_image)
+    # Process the downgraded image
+    defogged_image, dark_channel_img, transmission_map = defog_image(downgraded_image)
     st.image(dark_channel_img, caption="Dark Channel Image", use_container_width=True)
     st.image(transmission_map, caption="Transmission Map", use_container_width=True)
     st.image(defogged_image, caption="Defogged Image", use_container_width=True)
