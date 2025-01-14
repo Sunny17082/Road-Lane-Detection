@@ -36,7 +36,6 @@ def defog_image(image):
     dark_channel_img = dark_channel(I)
     A = estimate_atmospheric_light(I, dark_channel_img)
     omega = dynamic_omega(I)
-    st.write(f"Dynamic Omega: {omega}")
     t = 1 - omega * (dark_channel_img / np.max(A))
     t = np.clip(t, 0.1, 1)
     t = cv2.bilateralFilter(t.astype(np.float32), 5, 0.1, 0.1)
